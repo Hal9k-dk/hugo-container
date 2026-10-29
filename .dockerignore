@@ -1,0 +1,6 @@
+*
+!Dockerfile
+!entrypoint.sh
+!deploy-site
+!nginx.conf
+!sshd_config

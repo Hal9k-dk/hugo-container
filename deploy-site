@@ -1,0 +1,73 @@
+#!/bin/bash
+set -Eeuo pipefail
+umask 022
+
+if [[ "${1:-}" == --ssh ]]; then
+    case "${SSH_ORIGINAL_COMMAND:-}" in
+        'git pull'|deploy) ;;
+        *) echo 'Only "git pull" or "deploy" is permitted.' >&2; exit 64 ;;
+    esac
+elif [[ $# != 0 ]]; then
+    echo 'Unexpected arguments.' >&2
+    exit 64
+fi
+
+source /run/deploy-env
+export HOME=/home/deploy
+export GIT_TERMINAL_PROMPT=0
+export GIT_SSH_COMMAND='ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes'
+: "${REPO_URL:?}"
+: "${BRANCH:?}"
+git check-ref-format --branch "$BRANCH" >/dev/null
+cd /data/site
+
+# Serialize CI jobs (including overlapping builds).
+exec 9>.deploy.lock
+flock -x 9
+
+if [[ ! -d repo/.git ]]; then
+    rm -rf -- .repo-clone
+    GIT_LFS_SKIP_SMUDGE=1 git clone --single-branch --branch "$BRANCH" -- "$REPO_URL" .repo-clone
+    mv .repo-clone repo
+fi
+
+# This working tree is deployment-only: do not make manual commits here.
+# An unexpected divergent history fails rather than silently discarding it.
+git -C repo remote set-url origin "$REPO_URL"
+GIT_LFS_SKIP_SMUDGE=1 git -C repo checkout "$BRANCH"
+GIT_LFS_SKIP_SMUDGE=1 git -C repo pull --ff-only origin "$BRANCH"
+echo 'Downloading Git LFS assets...'
+GIT_LFS_FORCE_PROGRESS=1 git -C repo lfs pull
+echo 'Updating submodules...'
+GIT_LFS_SKIP_SMUDGE=1 git -C repo submodule update --init --recursive
+GIT_LFS_FORCE_PROGRESS=1 git -C repo submodule foreach --recursive 'git lfs pull'
+
+release=$(mktemp -d /data/site/releases/build.XXXXXXXX)
+cleanup() {
+    if [[ -n "${release:-}" ]]; then rm -rf -- "$release"; fi
+    rm -f -- /data/site/.current-next
+}
+trap cleanup EXIT
+args=(--source /data/site/repo --destination "$release" --minify --environment "$HUGO_ENVIRONMENT")
+if [[ -n "${HUGO_BASEURL:-}" ]]; then
+    args+=(--baseURL "$HUGO_BASEURL")
+fi
+echo 'Building Hugo site...'
+hugo "${args[@]}"
+
+# mktemp creates the release directory as 0700. nginx runs as a separate
+# user and needs read/traverse access to the generated public output.
+chmod -R a+rX "$release"
+
+# nginx sees either the previous complete build or the new complete build.
+ln -s "$release" /data/site/.current-next
+mv -Tf /data/site/.current-next /data/site/current
+release=''
+
+# Keep the latest five successful builds. Never remove the active build.
+current=$(readlink /data/site/current)
+mapfile -t old_releases < <(find /data/site/releases -mindepth 1 -maxdepth 1 -type d -name 'build.*' -printf '%T@ %p\n' | sort -rn | tail -n +6 | cut -d ' ' -f 2-)
+for old in "${old_releases[@]}"; do
+    [[ "$old" == "$current" ]] || rm -rf -- "$old"
+done
+printf 'Published %s\n' "$(git -C repo rev-parse HEAD)"

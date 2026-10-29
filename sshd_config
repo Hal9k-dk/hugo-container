@@ -1,0 +1,23 @@
+Port 2222
+HostKey /data/ssh/ssh_host_ed25519_key
+PidFile /run/sshd.pid
+AuthorizedKeysFile /etc/ssh/authorized_keys/%u
+
+PermitRootLogin no
+AllowUsers deploy
+AuthenticationMethods publickey
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+StrictModes yes
+
+DisableForwarding yes
+PermitTTY no
+PermitTunnel no
+PermitUserRC no
+X11Forwarding no
+LogLevel VERBOSE
+
+Match User deploy
+    ForceCommand /usr/local/bin/deploy-site --ssh

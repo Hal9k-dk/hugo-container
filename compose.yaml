@@ -1,0 +1,28 @@
+services:
+  hugo:
+    build: .
+    restart: unless-stopped
+    environment:
+      REPO_URL: ${REPO_URL:?Set REPO_URL in .env}
+      BRANCH: ${BRANCH:-main}
+      HUGO_BASEURL: ${HUGO_BASEURL:-}
+      DEPLOY_AUTHORIZED_KEYS: ${DEPLOY_AUTHORIZED_KEYS:?Set DEPLOY_AUTHORIZED_KEYS to your CI public key}
+    ports:
+      - "8081:80"
+      - "2222:2222"
+    volumes:
+      - site-data:/data
+    # Uncomment for a private repository over SSH:
+    # secrets:
+    #   - repo_key
+    #   - repo_known_hosts
+    stop_grace_period: 30s
+
+volumes:
+  site-data:
+
+# secrets:
+#   repo_key:
+#     file: ./secrets/repo_key
+#   repo_known_hosts:
+#     file: ./secrets/repo_known_hosts
